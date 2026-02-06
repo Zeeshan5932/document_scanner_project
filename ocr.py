@@ -203,3 +203,49 @@ class OCRExtractor:
             "raw_data": None,
         }
 
+    def extract_roi_text(self, roi_image):
+        """
+        Extract text from a single Region of Interest (ROI) image.
+
+        WHY SEPARATE ROI EXTRACTION:
+        - Focuses OCR on relevant field only
+        - Improves confidence by reducing noise
+        - Enables per-field preprocessing
+        - Prevents field misalignment
+
+        Args:
+            roi_image (ndarray): Preprocessed ROI image
+
+        Returns:
+            dict: {
+                "text": extracted text (single string),
+                "confidence": confidence score (0-100),
+                "raw": raw OCR output
+            }
+        """
+        if roi_image is None or roi_image.size == 0:
+            return {"text": "", "confidence": 0, "raw": None}
+
+        try:
+            # Run EasyOCR on the ROI
+            results = self.reader.readtext(roi_image)
+
+            if not results:
+                return {"text": "", "confidence": 0, "raw": results}
+
+            # Concatenate all detected text
+            full_text = " ".join([text for (bbox, text, conf) in results])
+
+            # Calculate average confidence
+            confidences = [conf * 100 for (bbox, text, conf) in results]
+            avg_confidence = np.mean(confidences) if confidences else 0
+
+            return {
+                "text": full_text.strip(),
+                "confidence": avg_confidence,
+                "raw": results
+            }
+
+        except Exception as e:
+            print(f"❌ ERROR during ROI OCR extraction: {e}")
+            return {"text": "", "confidence": 0, "raw": None}

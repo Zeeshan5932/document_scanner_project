@@ -26,7 +26,7 @@ from camera import CameraCapture
 from file_uploader import FileUploader
 from preprocess import ImagePreprocessor
 from ocr import OCRExtractor
-from parser_rule_based import RuleBasedParser
+from roi_based_parser import ROIBasedParser  # NEW: ROI-based extraction (more accurate)
 from review import FieldReviewer
 from saver import DataSaver
 
@@ -49,7 +49,7 @@ class DocumentScannerPipeline:
         self.camera = None
         self.preprocessor = ImagePreprocessor()
         self.ocr_extractor = OCRExtractor()
-        self.rule_based_parser = RuleBasedParser()
+        self.roi_parser = ROIBasedParser(ocr_extractor=self.ocr_extractor)  # NEW: ROI-based parser
         self.reviewer = FieldReviewer()
         self.saver = DataSaver(str(self.output_dir))
     
@@ -155,64 +155,59 @@ class DocumentScannerPipeline:
         
         print("✓ Image preprocessed successfully")
         
-        # Step 2: OCR Extraction
-        print("\n[Step 2/7] 🔤 OCR Extraction...")
+        # IMPROVED: Skip full-image OCR, use ROI-based extraction instead
+        # WHY: Each field extracted from fixed position → no shifting, better accuracy
+        
+        # Step 2: ROI-Based Field Extraction (NEW - replaces full-image OCR)
+        print("\n[Step 2/7] 📍 ROI-Based Field Extraction...")
         print("-" * 40)
+        print("Extracting fields using Region of Interest approach...")
         
-        ocr_data = self.ocr_extractor.extract_ocr_data(processed, mode="form")
-        
-        if not ocr_data.get("text") or len(ocr_data["text"]) == 0:
-            print("❌ ERROR: No text detected in image")
-            return False
-        
-        self.ocr_extractor.print_ocr_summary(ocr_data)
-        
-        # Step 3: Quality Check & Parser Selection
-        print("\n[Step 3/7] 📊 Quality Check & Parser Selection...")
-        print("-" * 40)
-        
-        avg_confidence = self.ocr_extractor.get_average_confidence(ocr_data)
-        print(f"Average OCR confidence: {avg_confidence:.1f}%")
-        
-        # Check confidence threshold - REJECT LOW CONFIDENCE
-        if avg_confidence < OCR_CONFIDENCE_THRESHOLD:
-            print(f"\n❌ CONFIDENCE TOO LOW")
-            print(f"   Current: {avg_confidence:.1f}%")
-            print(f"   Required: >= {OCR_CONFIDENCE_THRESHOLD}%")
-            print("\nPossible solutions:")
-            print("  1. Re-scan with better lighting")
-            print("  2. Use higher resolution image")
-            print("  3. Position document more carefully")
-            print("  4. Clean smudged or faded documents")
-            
-            retry = input("\nRetry scanning? (y/n): ").strip().lower()
-            if retry == "y":
-                print("⊘ Returning to input menu for re-scan...")
-                return False  # Return to input selection
-            else:
-                print("⊘ Operation cancelled due to low confidence")
-                return False
-        
-        # Confidence is good - use rule-based parser
-        print(f"✓ Confidence {avg_confidence:.1f}% >= threshold {OCR_CONFIDENCE_THRESHOLD}%")
-        print("  → Using rule-based parser")
-        parser_type = "Rule-Based"
-        
-        # Step 4: Field Extraction
-        print(f"\n[Step 4/7] 📋 Field Extraction ({parser_type})...")
-        print("-" * 40)
-        
-        # Use rule-based parser (only option now)
-        extracted_data = self.rule_based_parser.parse(ocr_data)
+        # Use ROI-based parser on the ORIGINAL image (not preprocessed)
+        # WHY: ROI parser does its own preprocessing per field
+        extracted_data = self.roi_parser.parse_form(frame, self.ocr_extractor)
         
         if not extracted_data:
-            print("⚠ WARNING: No fields extracted")
-            proceed = input("Continue to review anyway? (y/n): ").strip().lower()
-            if proceed != "y":
-                print("⊘ Processing cancelled")
-                return False
-        else:
-            self.rule_based_parser.print_extraction_summary(extracted_data)
+            print("❌ ERROR: No fields could be extracted")
+            return False
+        
+        # Step 3: Quality Check & Summary
+        print("\n[Step 3/7] 📊 Quality Summary...")
+        print("-" * 40)
+        
+        # Calculate average confidence from extracted fields
+        confidences = [
+            d.get("confidence", 0)
+            for d in extracted_data.values()
+            if d.get("confidence", 0) > 0
+        ]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+        
+        print(f"Average extraction confidence: {avg_confidence:.1f}%")
+        
+        # Check for fields that need review
+        fields_need_review = [
+            f for f, d in extracted_data.items()
+            if d.get("require_review", False)
+        ]
+        
+        if fields_need_review:
+            print(f"⚠️  {len(fields_need_review)} field(s) need review: {', '.join(fields_need_review)}")
+        
+        # Step 4: Final data preparation
+        print(f"\n[Step 4/7] ✓ Field Extraction Complete")
+        print("-" * 40)
+        
+        # Convert to format expected by reviewer
+        # (reviewer expects {"field": {"value": "...", "confidence": ...}})
+        formatted_data = {}
+        for field_name, field_info in extracted_data.items():
+            formatted_data[field_name] = {
+                "value": field_info.get("value", ""),
+                "confidence": field_info.get("confidence", 0),
+            }
+        
+        extracted_data = formatted_data
         
         # Step 5: User Review (MANDATORY)
         print(f"\n[Step 5/7] 👀 User Review & Confirmation...")
@@ -220,7 +215,7 @@ class DocumentScannerPipeline:
         
         while True:
             # Display fields for review
-            self.reviewer.display_fields_for_review(extracted_data, parser_type)
+            self.reviewer.display_fields_for_review(extracted_data, "ROI-Based")
             
             # Get user action
             user_choice = self.reviewer.get_user_confirmation()
