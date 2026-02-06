@@ -19,14 +19,13 @@ class ImagePreprocessor:
     
     def preprocess(self, image):
         """
-        Preprocess image for OCR extraction.
+        Preprocess image for OCR extraction (optimized for handwritten text).
         
-        SAFE PIPELINE (light preprocessing):
+        PIPELINE (enhanced for handwriting):
         1. Convert to grayscale
-        2. Apply adaptive thresholding only
-        
-        NO hard edge detection, NO document scanning,
-        NO forced contour detection - just clean the image gently.
+        2. Apply denoising (bilateral filter)
+        3. Enhance contrast with CLAHE
+        4. Apply adaptive thresholding
         
         Args:
             image (ndarray): Input image in BGR format from OpenCV
@@ -43,16 +42,25 @@ class ImagePreprocessor:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             print("✓ Converted to grayscale")
             
-            # Step 2: Apply adaptive thresholding
-            # ADAPTIVE_THRESH_GAUSSIAN_C: uses Gaussian-weighted sum of neighborhood
-            # This works well for documents with varying lighting
+            # Step 2: Denoise (reduce noise while preserving edges)
+            # Bilateral filter: great for handwritten text
+            denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+            print("✓ Applied denoising")
+            
+            # Step 3: Enhance contrast with CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            # This helps with faded or low-contrast handwriting
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            print("✓ Enhanced contrast for handwriting")
+            
+            # Step 4: Apply adaptive thresholding with larger block for handwritten text
             processed = cv2.adaptiveThreshold(
-                gray,
+                enhanced,
                 255,                                  # Maximum value (white)
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,       # Adaptive method
                 cv2.THRESH_BINARY,                    # Thresholding method
-                blockSize=self.block_size,            # Neighborhood size (must be odd)
-                C=self.constant                       # Constant subtracted
+                blockSize=15,                         # Larger block for handwriting
+                C=3                                   # Adjusted constant
             )
             print("✓ Applied adaptive thresholding")
             
