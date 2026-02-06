@@ -1,0 +1,208 @@
+"""
+OCR Extraction Module
+Uses PaddleOCR for superior text detection including handwritten text.
+PaddleOCR Features:
+- Excellent at both printed AND handwritten text
+- No external binary dependencies
+- Returns text with confidence scores and bounding boxes
+- Multi-language support
+- High accuracy for mixed document types
+"""
+
+import numpy as np
+from paddleocr import PaddleOCR
+
+
+class OCRExtractor:
+    """Extracts text with positional and confidence data using PaddleOCR."""
+    
+    def __init__(self):
+        """Initialize OCR extractor with PaddleOCR."""
+        print("🔤 Initializing PaddleOCR (may download model on first run)...")
+        # Initialize with English language
+        # use_angle_cls=True helps with rotated text
+        # use_gpu=False for CPU (change to True if GPU available)
+        self.ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang='en',
+            use_gpu=False,
+            show_log=False  # Suppress unnecessary logging
+        )
+        print("✓ PaddleOCR initialized successfully")
+    
+    def extract_ocr_data(self, preprocessed_image, mode="form"):
+        """
+        Extract text with positional and confidence data using PaddleOCR.
+        
+        PaddleOCR is superior for:
+        - Handwritten text recognition
+        - Mixed printed/handwritten documents
+        - Text at various angles
+        - Low-quality scans
+        
+        Args:
+            preprocessed_image (ndarray): Preprocessed image from preprocess.py
+            mode (str): Ignored for PaddleOCR (kept for API compatibility)
+        
+        Returns:
+            dict: OCR data dictionary with keys:
+                - text: list of extracted words
+                - left: list of x-coordinates (bounding box top-left)
+                - top: list of y-coordinates (bounding box top-left)
+                - width: list of bounding box widths
+                - height: list of bounding box heights
+                - confidence: list of confidence scores (0-100, converted from 0-1)
+                - raw_data: raw PaddleOCR output
+        """
+        try:
+            if preprocessed_image is None:
+                print("❌ ERROR: Preprocessed image is None")
+                return self._empty_ocr_data()
+            
+            print(f"🔤 Extracting text with PaddleOCR...")
+            
+            # Run PaddleOCR detection
+            # Returns list of [[[x1, y1], [x2, y2], [x3, y3], [x4, y4]], (text, confidence)]
+            results = self.ocr.ocr(preprocessed_image, cls=True)
+            
+            if not results or not results[0]:
+                print("❌ No text detected in image")
+                return self._empty_ocr_data()
+            
+            # Process results - extract text, positions, and confidence
+            processed_data = {
+                "text": [],
+                "left": [],
+                "top": [],
+                "width": [],
+                "height": [],
+                "confidence": [],
+            }
+            
+            # PaddleOCR returns results as a list of lines, each containing detections
+            all_detections = []
+            for line in results:
+                for detection in line:
+                    if detection and len(detection) == 2:
+                        bbox, (text, conf) = detection
+                        
+                        # bbox is [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] (4 corners)
+                        # Convert to left, top, width, height
+                        xs = [point[0] for point in bbox]
+                        ys = [point[1] for point in bbox]
+                        
+                        x_min = int(min(xs))
+                        y_min = int(min(ys))
+                        x_max = int(max(xs))
+                        y_max = int(max(ys))
+                        
+                        width = x_max - x_min
+                        height = y_max - y_min
+                        
+                        # Convert confidence from 0-1 scale to 0-100%
+                        confidence = int(conf * 100)
+                        
+                        # Store detection info
+                        all_detections.append({
+                            "text": text.strip(),
+                            "left": x_min,
+                            "top": y_min,
+                            "width": width,
+                            "height": height,
+                            "confidence": confidence,
+                        })
+            
+            # Sort by position (top-to-bottom, left-to-right) for consistency
+            all_detections.sort(key=lambda x: (x["top"], x["left"]))
+            
+            # Filter out low-confidence or empty detections
+            for detection in all_detections:
+                # Only include detections with confidence > 0
+                if detection["confidence"] > 0 and detection["text"]:
+                    processed_data["text"].append(detection["text"])
+                    processed_data["left"].append(detection["left"])
+                    processed_data["top"].append(detection["top"])
+                    processed_data["width"].append(detection["width"])
+                    processed_data["height"].append(detection["height"])
+                    processed_data["confidence"].append(detection["confidence"])
+            
+            processed_data["raw_data"] = results
+            
+            print(f"✓ OCR extraction complete: {len(processed_data['text'])} words detected")
+            return processed_data
+            
+        except Exception as e:
+            print(f"❌ ERROR during OCR extraction: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._empty_ocr_data()
+    
+    def extract_plain_text(self, preprocessed_image, mode="form"):
+        """
+        Extract plain text without positional data.
+        
+        Args:
+            preprocessed_image (ndarray): Preprocessed image
+            mode (str): Ignored for PaddleOCR
+        
+        Returns:
+            str: Extracted text
+        """
+        try:
+            ocr_data = self.extract_ocr_data(preprocessed_image, mode)
+            text = " ".join(ocr_data.get("text", []))
+            return text.strip()
+            
+        except Exception as e:
+            print(f"❌ ERROR during text extraction: {e}")
+            return ""
+    
+    @staticmethod
+    def get_average_confidence(ocr_data):
+        """
+        Calculate average OCR confidence.
+        
+        Args:
+            ocr_data (dict): OCR data dictionary
+        
+        Returns:
+            float: Average confidence (0-100) or 0 if no data
+        """
+        if not ocr_data.get("confidence") or len(ocr_data["confidence"]) == 0:
+            return 0
+        
+        return float(np.mean(ocr_data["confidence"]))
+    
+    @staticmethod
+    def print_ocr_summary(ocr_data):
+        """
+        Print OCR extraction summary.
+        
+        Args:
+            ocr_data (dict): OCR data dictionary
+        """
+        avg_conf = OCRExtractor.get_average_confidence(ocr_data)
+        word_count = len(ocr_data["text"])
+        preview_text = " ".join(ocr_data["text"][:5])
+        
+        print("\n" + "="*60)
+        print("🔤 OCR EXTRACTION SUMMARY")
+        print("="*60)
+        print(f"Words detected:      {word_count}")
+        print(f"Average confidence:  {avg_conf:.1f}%")
+        print(f"Text preview:        {preview_text}...")
+        print("="*60)
+    
+    @staticmethod
+    def _empty_ocr_data():
+        """Return empty OCR data structure."""
+        return {
+            "text": [],
+            "left": [],
+            "top": [],
+            "width": [],
+            "height": [],
+            "confidence": [],
+            "raw_data": None,
+        }
+
